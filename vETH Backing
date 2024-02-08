@@ -1,0 +1,162 @@
+-- WETHAddress: 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
+-- VECAddress: 0x1bb9b64927e0c5e207c9db4093b3738eef5d8447
+-- VECDeploymentBlockNumber: 19056491
+-- VECDeploymentTimestamp: TIMESTAMP '2024-01-21'
+WITH
+  vETHSupplyChanges AS (
+    SELECT
+      *
+    FROM
+      query_3383066 -- vETH Supply Changes
+  ),
+  reserveByToken AS (
+    SELECT
+      symbol,
+      SUM(amountToken) AS reserve,
+      SUM(IF(type = 'Deposit', amountVETH, NULL)) AS vETHMinted,
+      SUM(IF(type = 'Redeem', amountVETH, NULL)) AS vETHRedeemed,
+      SUM(amountVETH) AS netVETHMinted,
+      COUNT(DISTINCT (user)) AS numberOfStakers,
+      COUNT(DISTINCT (IF(type = 'Deposit', user, NULL))) AS numberOfMints,
+      COUNT(DISTINCT (IF(type = 'Redeem', user, NULL))) AS numberOfRedemptions,
+      token
+    FROM
+      vETHSupplyChanges
+    GROUP BY
+      token,
+      symbol
+  ),
+  latestWETHPriceUSD AS (
+    SELECT
+      price AS wethPriceUSD
+    FROM
+      prices.usd_latest
+    WHERE
+      contract_address = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 -- wETH
+  ),
+  latestRSETHPrice AS (
+    SELECT
+      0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7 AS token, -- rsETH
+      CAST(ABS(amount1) AS DOUBLE) -- wETH
+      / ABS(amount0) AS priceWETH -- rsETH
+    FROM
+      uniswap_v3_ethereum.Pair_evt_Swap
+    WHERE
+      contract_address = 0xEd33968EC2122D91450b97D2e91c953856c49DAd
+    ORDER BY
+      evt_block_time DESC
+    LIMIT
+      1
+  ),
+  latestEZETHPrice AS (
+    SELECT
+      0xbf5495Efe5DB9ce00f80364C8B423567e58d2110 AS token, -- ezETH
+      CAST(ABS(amount1) AS DOUBLE) -- wETH
+      / ABS(amount0) AS priceWETH -- ezETH
+    FROM
+      uniswap_v3_ethereum.Pair_evt_Swap
+    WHERE
+      contract_address = 0xBE80225f09645f172B079394312220637C440A63
+    ORDER BY
+      evt_block_time DESC
+    LIMIT
+      1
+  ),
+  latestEETHPrice AS (
+    SELECT
+      0x35fa164735182de50811e8e2e824cfb9b6118ac2 AS token, -- eETH
+      CAST(ABS(amount1) AS DOUBLE) -- wETH
+      / ABS(amount0) AS priceWETH -- weETH
+    FROM
+      uniswap_v3_ethereum.Pair_evt_Swap
+    WHERE
+      contract_address = 0x7A415B19932c0105c82FDB6b720bb01B0CC2CAe3
+    ORDER BY
+      evt_block_time DESC
+    LIMIT
+      1
+  ),
+  latestRSWETHPrice AS (
+    SELECT
+      0xFAe103DC9cf190eD75350761e95403b7b8aFa6c0 AS token, -- rswETH
+      CAST(ABS(amount0) AS DOUBLE) -- wETH
+      / ABS(amount1) AS priceWETH -- rswETH 
+    FROM
+      uniswap_v3_ethereum.Pair_evt_Swap
+    WHERE
+      contract_address = 0x00cE80a0b06A4F6d47e11e5aE1E7186bf0866391
+    ORDER BY
+      evt_block_time DESC
+    LIMIT
+      1
+  ),
+  latestSFRXETHPrice AS (
+    SELECT
+      0xac3E018457B222d93114458476f3E3416Abbe38F AS token, -- sfrxETH
+      CAST(ABS(amount1) AS DOUBLE) -- wETH
+      / ABS(amount0) AS priceWETH -- sfrxETH 
+    FROM
+      uniswap_v3_ethereum.Pair_evt_Swap
+    WHERE
+      contract_address = 0xeed4603BC333EF406E5EB691BA66798d5c857d8B
+    ORDER BY
+      evt_block_time DESC
+    LIMIT
+      1
+  ),
+  -- Prices for tokens not in prices.usd_latest spellbook
+  customPrices AS (
+    SELECT
+      token,
+      priceWETH,
+      priceWETH * wethPriceUSD AS priceUSD
+    FROM
+      (
+        SELECT
+          *
+        FROM
+          latestRSETHPrice
+        UNION ALL
+        SELECT
+          *
+        FROM
+          latestEZETHPrice
+        UNION ALL
+        SELECT
+          *
+        FROM
+          latestEETHPrice
+        UNION ALL
+        SELECT
+          *
+        FROM
+          latestRSWETHPrice
+        UNION ALL
+        SELECT
+          *
+        FROM
+          latestSFRXETHPrice
+      )
+      CROSS JOIN latestWETHPriceUSD
+  )
+SELECT
+  reserveByToken.symbol,
+  reserve,
+  reserve * COALESCE(price, priceUSD, NULL) AS valueUSD,
+  vETHMinted,
+  vETHRedeemed,
+  netVETHMinted,
+  numberOfStakers,
+  numberOfMints,
+  numberOfRedemptions,
+  reserveByToken.token
+FROM
+  reserveByToken
+  LEFT JOIN prices.usd_latest ON (
+    blockchain = 'ethereum'
+    AND contract_address = token
+  )
+  LEFT JOIN customPrices ON reserveByToken.token = customPrices.token
+ORDER BY
+  valueUSD DESC,
+  reserve DESC
